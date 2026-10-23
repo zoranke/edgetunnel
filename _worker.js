@@ -5850,76 +5850,98 @@ async function 读取config_JSON(env, hostname, userID, UA = "Mozilla/5.0", 重�
 }
 
 function 识别运营商(request) {
-	const cf = request?.cf;
-	const ASN运营商映射 = {
-		'4134': 'ct',
-		'4809': 'ct',
-		'4811': 'ct',
-		'4812': 'ct',
-		'4815': 'ct',
-		'4837': 'cu',
-		'4814': 'cu',
-		'9929': 'cu',
-		'17623': 'cu',
-		'17816': 'cu',
-		'9808': 'cmcc',
-		'24400': 'cmcc',
-		'56040': 'cmcc',
-		'56041': 'cmcc',
-		'56044': 'cmcc',
-	};
-	const 运营商关键词映射 = [
-		{ code: 'ct', pattern: /chinanet|chinatelecom|china telecom|cn2|shtel/ },
-		{ code: 'cmcc', pattern: /cmi|cmnet|chinamobile|china mobile|cmcc|mobile communications/ },
-		{ code: 'cu', pattern: /china169|china unicom|chinaunicom|cucc|cncgroup|cuii|netcom/ },
-	];
-	if (String(cf?.country || '').toLowerCase() !== 'cn') return 'cf';
-	const 组织名称 = String(cf?.asOrganization || '').toLowerCase();
-	const 命中运营商 = 运营商关键词映射.find(({ pattern }) => pattern.test(组织名称))?.code;
-	return 命中运营商 || ASN运营商映射[String(cf?.asn || '')] || 'cf';
+const cf = request?.cf;
+const ASN运营商映射 = {
+'4134': 'ct',
+'4809': 'ct',
+'4811': 'ct',
+'4812': 'ct',
+'4815': 'ct',
+'4837': 'cu',
+'4814': 'cu',
+'9929': 'cu',
+'17623': 'cu',
+'17816': 'cu',
+'9808': 'cmcc',
+'24400': 'cmcc',
+'56040': 'cmcc',
+'56041': 'cmcc',
+'56044': 'cmcc',
+};
+const 运营商关键词映射 = [
+{ code: 'ct', pattern: /chinanet|chinatelecom|china telecom|cn2|shtel/ },
+{ code: 'cmcc', pattern: /cmi|cmnet|chinamobile|china mobile|cmcc|mobile communications/ },
+{ code: 'cu', pattern: /china169|china unicom|chinaunicom|cucc|cncgroup|cuii|netcom/ },
+];
+if (String(cf?.country || '').toLowerCase() !== 'cn') return 'cf';
+const 组织名称 = String(cf?.asOrganization || '').toLowerCase();
+const 命中运营商 = 运营商关键词映射.find(({ pattern }) => pattern.test(组织名称))?.code;
+// 大陆访客无法从 ASN/组织名确定运营商时，使用三家运营商候选网段的合并池。
+return 命中运营商 || ASN运营商映射[String(cf?.asn || '')] || 'cn';
 }
-
 async function 生成随机IP(request, count = 16, 指定端口 = -1) {
-	const url = new URL(request.url);
-	const 查询参数运营商 = String(url.searchParams.get('cnIspCode') || '').toLowerCase();
-	const 运营商文件标识 = ['ct', 'cu', 'cmcc', 'cf'].includes(查询参数运营商) ? 查询参数运营商 : 识别运营商(request);
-	const 运营商名称映射 = {
-		cmcc: 'CF移动优选',
-		cu: 'CF联通优选',
-		ct: 'CF电信优选',
-		cf: 'CF官方优选',
-	};
-	const cidr_url = 运营商文件标识 === 'cf' ? `https://raw.githubusercontent.com/${特征码字典[1]}/${特征码字典[1]}/main/CF-CIDR.txt` : `https://raw.githubusercontent.com/${特征码字典[1]}/${特征码字典[1]}/main/CF-CIDR/${运营商文件标识}.txt`;
-	const cfname = 运营商名称映射[运营商文件标识] || 'CF官方优选';
-	const cfport = [443, 2053, 2083, 2087, 2096, 8443];
-	let cidrList = [];
-	try { const res = await fetch(cidr_url); cidrList = res.ok ? await 整理成数组(await res.text()) : ['104.16.0.0/13'] } catch { cidrList = ['104.16.0.0/13'] }
-
-	const generateRandomIPFromCIDR = (cidr) => {
-		const [baseIP, prefixLength] = cidr.split('/'), prefix = parseInt(prefixLength), hostBits = 32 - prefix;
-		const ipInt = baseIP.split('.').reduce((a, p, i) => a | (parseInt(p) << (24 - i * 8)), 0);
-		const randomOffset = Math.floor(Math.random() * Math.pow(2, hostBits));
-		const mask = (0xFFFFFFFF << hostBits) >>> 0, randomIP = (((ipInt & mask) >>> 0) + randomOffset) >>> 0;
-		return [(randomIP >>> 24) & 0xFF, (randomIP >>> 16) & 0xFF, (randomIP >>> 8) & 0xFF, randomIP & 0xFF].join('.');
-	};
-	const randomIPs = Array.from({ length: count }, (_, index) => {
-		const ip = generateRandomIPFromCIDR(cidrList[Math.floor(Math.random() * cidrList.length)]);
-		const 目标端口 = 指定端口 === -1
-			? cfport[Math.floor(Math.random() * cfport.length)]
-			: 指定端口;
-		return `${ip}:${目标端口}#${cfname}${index + 1}`;
-	});
-	return [randomIPs, randomIPs.join('\n')];
+const url = new URL(request.url);
+const 查询参数运营商 = String(url.searchParams.get('cnIspCode') || '').toLowerCase();
+const 运营商文件标识 = ['ct', 'cu', 'cmcc', 'cn', 'cf'].includes(查询参数运营商) ? 查询参数运营商 : 识别运营商(request);
+const 运营商名称映射 = {
+cmcc: 'CF移动优选',
+cu: 'CF联通优选',
+ct: 'CF电信优选',
+cn: 'CF大陆汇总优选',
+cf: 'CF官方优选',
+};
+const 文件标识列表 = 运营商文件标识 === 'cn' ? ['ct', 'cu', 'cmcc'] : [运营商文件标识];
+const cfport = [443, 2053, 2083, 2087, 2096, 8443];
+const cidrResults = await Promise.all(文件标识列表.map(async 文件标识 => {
+const cidr_url = 文件标识 === 'cf'
+? `https://raw.githubusercontent.com/${特征码字典[1]}/${特征码字典[1]}/main/CF-CIDR.txt`
+: `https://raw.githubusercontent.com/${特征码字典[1]}/${特征码字典[1]}/main/CF-CIDR/${文件标识}.txt`;
+try {
+const res = await fetch(cidr_url);
+return res.ok ? await 整理成数组(await res.text()) : [];
+} catch {
+return [];
 }
-
+}));
+const cidrList = [...new Set(cidrResults.flat())];
+const parseCIDR = cidr => {
+const match = String(cidr).trim().match(/^((?:\d{1,3}\.){3}\d{1,3})(?:\/(\d{1,2}))?$/);
+if (!match) return null;
+const octets = match[1].split('.').map(Number);
+if (octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255)) return null;
+const prefix = match[2] === undefined ? 32 : Number(match[2]);
+if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return null;
+const ipInt = octets.reduce((value, octet) => (value * 256) + octet, 0);
+const rangeSize = 2 ** (32 - prefix);
+const networkInt = Math.floor(ipInt / rangeSize) * rangeSize;
+return { networkInt, rangeSize };
+};
+let ipPools = cidrList.map(parseCIDR).filter(Boolean);
+let cfname = 运营商名称映射[运营商文件标识] || 'CF官方优选';
+if (ipPools.length === 0) {
+// 源站暂不可用或返回空/非法内容时，回退到已知的 Cloudflare IPv4 网段。
+cfname = 'CF官方回退';
+ipPools = [parseCIDR('104.16.0.0/13')];
+}
+const 数量 = Math.max(1, Math.min(64, Math.floor(Number(count) || 16)));
+const randomIPs = Array.from({ length: 数量 }, (_, index) => {
+const pool = ipPools[Math.floor(Math.random() * ipPools.length)];
+const ip = (pool.networkInt + Math.floor(Math.random() * pool.rangeSize)) >>> 0;
+const ipText = [(ip >>> 24) & 0xFF, (ip >>> 16) & 0xFF, (ip >>> 8) & 0xFF, ip & 0xFF].join('.');
+const 目标端口 = 指定端口 === -1
+? cfport[Math.floor(Math.random() * cfport.length)]
+: 指定端口;
+return `${ipText}:${目标端口}#${cfname}${index + 1}`;
+});
+return [randomIPs, randomIPs.join('\n')];
+}
 async function 整理成数组(内容) {
-	var 替换后的内容 = 内容.replace(/[	"'\r\n]+/g, ',').replace(/,+/g, ',');
-	if (替换后的内容.charAt(0) == ',') 替换后的内容 = 替换后的内容.slice(1);
-	if (替换后的内容.charAt(替换后的内容.length - 1) == ',') 替换后的内容 = 替换后的内容.slice(0, 替换后的内容.length - 1);
-	const 地址数组 = 替换后的内容.split(',');
-	return 地址数组;
+var 替换后的内容 = 内容.replace(/["'\r\n]+/g, ',').replace(/,+/g, ',');
+if (替换后的内容.charAt(0) == ',') 替换后的内容 = 替换后的内容.slice(1);
+if (替换后的内容.charAt(替换后的内容.length - 1) == ',') 替换后的内容 = 替换后的内容.slice(0, 替换后的内容.length - 1);
+const 地址数组 = 替换后的内容.split(',');
+return 地址数组;
 }
-
 async function 获取优选订阅生成器数据(优选订阅生成器HOST, uid = "000000") {
 	let 优选IP = [], 其他节点LINK = '', 格式化HOST = 优选订阅生成器HOST.replace(/^sub:\/\//i, 'https://').split('#')[0].split('?')[0];
 	if (!/^https?:\/\//i.test(格式化HOST)) 格式化HOST = `https://${格式化HOST}`;
